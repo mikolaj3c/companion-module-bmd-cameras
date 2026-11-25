@@ -474,7 +474,12 @@ function buildColorGainStepAction(
 	direction: 1 | -1,
 ): CompanionActionDefinition {
 	const channelLabel = channel.charAt(0).toUpperCase() + channel.slice(1)
-	const actionLabel = direction > 0 ? `${channelLabel} Gain Up (+1)` : `${channelLabel} Gain Down (-1)`
+	const step = channel === 'green' ? 1 : 0.1
+	const stepLabel = step.toFixed(step === 1 ? 0 : 1)
+	const signedStep = direction > 0 ? `+${stepLabel}` : `-${stepLabel}`
+	const actionLabel = direction > 0
+		? `${channelLabel} Gain Up (${signedStep})`
+		: `${channelLabel} Gain Down (${signedStep})`
 	const endpointPath = '/colorCorrection/gain'
 
 	return {
@@ -495,7 +500,9 @@ function buildColorGainStepAction(
 						throw new Error(`Camera returned an invalid ${channel} color-correction gain value`)
 					}
 
-					const nextValue = currentValue + direction
+					// Red and blue require fine 0.1 increments; green remains at 1.
+					// Round decimal channels to one place to avoid floating-point artifacts.
+					const nextValue = Number((currentValue + direction * step).toFixed(step === 1 ? 0 : 1))
 					await self.client.request('PUT', endpointPath, { [channel]: nextValue })
 					self.store.set(endpointPath, { ...currentValues, [channel]: nextValue }, 'rest')
 					self.log('debug', `${channelLabel} color-correction gain changed from ${currentValue} to ${nextValue}`)
