@@ -494,14 +494,16 @@ function buildColorGainStepAction(
 					}
 
 					const currentValues = currentResponse as Record<string, unknown>
-					const currentValue = Number(currentValues[channel])
-					if (!Number.isFinite(currentValue)) {
+					const rawCurrentValue = Number(currentValues[channel])
+					if (!Number.isFinite(rawCurrentValue)) {
 						throw new Error(`Camera returned an invalid ${channel} color-correction gain value`)
 					}
 
-					// Red and blue require fine 0.1 increments; green remains at 1.
-					// Round decimal channels to one place to avoid floating-point artifacts.
-					const nextValue = Number((currentValue + direction * step).toFixed(step === 1 ? 0 : 1))
+					// Camera values can arrive as float32 artifacts (for example 3.299999952316284).
+					// Normalize the current value to one decimal place before applying the step.
+					const currentValue = Number(rawCurrentValue.toFixed(1))
+					// Red and blue use 0.1 increments; green remains at 1.
+					const nextValue = Number((currentValue + direction * step).toFixed(1))
 					await self.client.request('PUT', endpointPath, { [channel]: nextValue })
 					self.store.set(endpointPath, { ...currentValues, [channel]: nextValue }, 'rest')
 					self.log('debug', `${channelLabel} color-correction gain changed from ${currentValue} to ${nextValue}`)
