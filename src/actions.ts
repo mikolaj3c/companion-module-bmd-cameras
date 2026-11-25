@@ -544,10 +544,7 @@ function buildWhiteBalanceStepAction(self: ModuleInstance, direction: 1 | -1): C
 
 					await self.client.request('PUT', '/video/whiteBalance', { whiteBalance: nextWhiteBalance })
 					self.store.set('/video/whiteBalance', { whiteBalance: nextWhiteBalance }, 'rest')
-					self.log(
-						'debug',
-						'White balance changed from ' + currentWhiteBalance + ' K to ' + nextWhiteBalance + ' K',
-					)
+					self.log('debug', 'White balance changed from ' + currentWhiteBalance + ' K to ' + nextWhiteBalance + ' K')
 				})
 			} catch (error) {
 				self.log('error', 'Action ' + label + ' failed: ' + errorMessage(error))
