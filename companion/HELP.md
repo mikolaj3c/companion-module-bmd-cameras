@@ -33,6 +33,8 @@ For endpoints with known supported values (like ISO, gain, ND filter, shutter), 
 
 Two encoder-friendly actions are also available when the camera supports reading and setting gain: **Gain Up (+2 dB)** and **Gain Down (-2 dB)**. Each action reads the current gain from the camera and changes it by exactly 2 dB. For Studio Camera 4K Pro, the allowed range is -12 dB to +36 dB. The actions do not use `/video/supportedGains`, because some firmware versions may advertise unsupported intermediate 1 dB values.
 
+For color correction, six additional encoder-friendly actions are available when `/colorCorrection/gain` supports GET and PUT: **Blue Gain Up/Down**, **Green Gain Up/Down**, and **Red Gain Up/Down**. Each action reads the current RGB gain values and changes only its selected channel by exactly 1. It sends only that channel in the PUT request, leaving the other channels unchanged.
+
 Endpoints with nested data (like slate/clip metadata) support three action types:
 
 - **Full update** — set all fields at once
