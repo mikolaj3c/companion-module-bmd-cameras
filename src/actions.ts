@@ -474,7 +474,7 @@ function buildColorGainStepAction(
 	direction: 1 | -1,
 ): CompanionActionDefinition {
 	const channelLabel = channel.charAt(0).toUpperCase() + channel.slice(1)
-	const step = channel === 'green' ? 1 : 0.1
+	const step = 0.1
 	const stepLabel = step.toFixed(step === 1 ? 0 : 1)
 	const signedStep = direction > 0 ? `+${stepLabel}` : `-${stepLabel}`
 	const actionLabel =
@@ -502,7 +502,7 @@ function buildColorGainStepAction(
 					// Camera values can arrive as float32 artifacts (for example 3.299999952316284).
 					// Normalize the current value to one decimal place before applying the step.
 					const currentValue = Number(rawCurrentValue.toFixed(1))
-					// Red and blue use 0.1 increments; green remains at 1.
+					// All RGB channels use 0.1 increments.
 					const nextValue = Number((currentValue + direction * step).toFixed(1))
 					await self.client.request('PUT', endpointPath, { [channel]: nextValue })
 					self.store.set(endpointPath, { ...currentValues, [channel]: nextValue }, 'rest')
@@ -510,6 +510,47 @@ function buildColorGainStepAction(
 				})
 			} catch (error) {
 				self.log('error', `Action '${actionLabel}' failed: ${errorMessage(error)}`)
+			}
+		},
+	}
+}
+
+/**
+ * Increment/decrement white balance in 100 K steps.
+ * The camera API exposes the current value at /video/whiteBalance.
+ */
+function buildWhiteBalanceStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
+	const stepKelvin = 100
+	const label = direction > 0 ? 'White Balance Up (+100 K)' : 'White Balance Down (-100 K)'
+	return {
+		name: label,
+		description: 'Changes white balance by exactly 100 K, within 2500 K to 10000 K.',
+		options: [],
+		callback: async (_event: CompanionActionEvent) => {
+			try {
+				await withMutex('/video/whiteBalance', async () => {
+					const currentResponse = await self.client.request('GET', '/video/whiteBalance')
+					if (!currentResponse || typeof currentResponse !== 'object' || Array.isArray(currentResponse)) {
+						throw new Error('Camera did not return the current white balance value')
+					}
+
+					const currentWhiteBalance = Number((currentResponse as Record<string, unknown>).whiteBalance)
+					if (!Number.isFinite(currentWhiteBalance)) {
+						throw new Error('Camera returned an invalid white balance value')
+					}
+
+					const nextWhiteBalance = currentWhiteBalance + direction * stepKelvin
+					if (nextWhiteBalance < 2500 || nextWhiteBalance > 10000) return
+
+					await self.client.request('PUT', '/video/whiteBalance', { whiteBalance: nextWhiteBalance })
+					self.store.set('/video/whiteBalance', { whiteBalance: nextWhiteBalance }, 'rest')
+					self.log(
+						'debug',
+						'White balance changed from ' + currentWhiteBalance + ' K to ' + nextWhiteBalance + ' K',
+					)
+				})
+			} catch (error) {
+				self.log('error', 'Action ' + label + ' failed: ' + errorMessage(error))
 			}
 		},
 	}
@@ -550,6 +591,14 @@ export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint
 			definitions[`colorCorrection_gain_${channel}_up`] = buildColorGainStepAction(self, channel, 1)
 			definitions[`colorCorrection_gain_${channel}_down`] = buildColorGainStepAction(self, channel, -1)
 		}
+	}
+	// Encoder-friendly white-balance actions. The variable video_whiteBalance reflects the updated value.
+	const whiteBalanceEndpoint = endpoints.find(
+		(endpoint) => endpoint.path === '/video/whiteBalance' && !endpoint.unsupported,
+	)
+	if (whiteBalanceEndpoint?.methods.includes('GET') && whiteBalanceEndpoint.methods.includes('PUT')) {
+		definitions['video_whiteBalance_up'] = buildWhiteBalanceStepAction(self, 1)
+		definitions['video_whiteBalance_down'] = buildWhiteBalanceStepAction(self, -1)
 	}
 	return definitions
 }
