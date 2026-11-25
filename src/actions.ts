@@ -475,7 +475,7 @@ function buildColorGainStepAction(
 ): CompanionActionDefinition {
 	const channelLabel = channel.charAt(0).toUpperCase() + channel.slice(1)
 	const step = 0.1
-	const stepLabel = step.toFixed(step === 1 ? 0 : 1)
+	const stepLabel = step.toFixed(1)
 	const signedStep = direction > 0 ? `+${stepLabel}` : `-${stepLabel}`
 	const actionLabel =
 		direction > 0 ? `${channelLabel} Gain Up (${signedStep})` : `${channelLabel} Gain Down (${signedStep})`
