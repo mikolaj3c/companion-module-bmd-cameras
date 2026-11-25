@@ -31,7 +31,7 @@ Actions are generated from the camera's own API specification. Only endpoints th
 
 For endpoints with known supported values (like ISO, gain, ND filter, shutter), the action fields are populated as dropdowns with the camera's actual supported values. These update automatically when the camera's configuration changes.
 
-Two encoder-friendly actions are also available when the camera supports reading and setting gain: **Gain Up** and **Gain Down**. Each action reads the current gain from the camera and moves to the next or previous value reported by `/video/supportedGains`. For Studio Camera 4K Pro, the fallback step is 2 dB when that endpoint is unavailable.
+Two encoder-friendly actions are also available when the camera supports reading and setting gain: **Gain Up (+2 dB)** and **Gain Down (-2 dB)**. Each action reads the current gain from the camera and changes it by exactly 2 dB. For Studio Camera 4K Pro, the allowed range is -12 dB to +36 dB. The actions do not use `/video/supportedGains`, because some firmware versions may advertise unsupported intermediate 1 dB values.
 
 Endpoints with nested data (like slate/clip metadata) support three action types:
 
