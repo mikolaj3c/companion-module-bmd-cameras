@@ -331,7 +331,7 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 	const label = direction > 0 ? 'Gain Up (+1 dB)' : 'Gain Down (-1 dB)'
 	return {
 		name: label,
-		description: 'Reads the current camera gain and moves one supported step.',
+		description: 'Reads current camera gain and changes it by exactly 1 dB when that value is supported.',
 		options: [],
 		callback: async (_event: CompanionActionEvent) => {
 			try {
@@ -359,28 +359,18 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 						// Some camera models may not expose supportedGains. Fall back to +/- 1 dB.
 					}
 
-					let nextGain: number
-					if (supportedValues.length > 0) {
-						const currentIndex = supportedValues.findIndex((value) => value === currentGain)
-						if (currentIndex >= 0) {
-							const nextIndex = currentIndex + direction
-							if (nextIndex < 0 || nextIndex >= supportedValues.length) return
-							nextGain = supportedValues[nextIndex]
-						} else {
-							const candidates = supportedValues.filter((value) =>
-								direction > 0 ? value > currentGain : value < currentGain,
-							)
-							if (candidates.length === 0) return
-							nextGain = direction > 0 ? candidates[0] : candidates[candidates.length - 1]
-						}
-					} else {
-						nextGain = currentGain + direction
+					const nextGain = currentGain + direction
+					if (supportedValues.length > 0 && !supportedValues.includes(nextGain)) {
+						self.log(
+							'warn',
+							`Cannot change gain by exactly 1 dB from ${currentGain} dB: ${nextGain} dB is not in the camera's supported gain list.`,
+						)
+						return
 					}
 
-					const putResult = await self.client.request('PUT', '/video/gain', { gain: nextGain })
+					await self.client.request('PUT', '/video/gain', { gain: nextGain })
 					self.store.set('/video/gain', { gain: nextGain }, 'rest')
 					self.log('debug', `Gain changed from ${currentGain} dB to ${nextGain} dB`)
-					void putResult
 				})
 			} catch (error) {
 				self.log('error', `Action '${label}' failed: ${errorMessage(error)}`)
