@@ -425,10 +425,10 @@ function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoi
 * If the camera advertises supported gain values, the target must be in that list.
 */
 function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
-	const label = direction > 0 ? 'Gain Up (+1 dB)' : 'Gain Down (-1 dB)'
+	const label = direction > 0 ? 'Gain Up' : 'Gain Down'
 	return {
 		name: label,
-		description: 'Reads the current camera gain and changes it by exactly 1 dB.',
+		description: 'Reads current gain and moves to the next or previous value supported by the camera.',
 		options: [],
 		callback: async (_event: CompanionActionEvent) => {
 			try {
@@ -450,16 +450,26 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 							? (supportedResponse as Record<string, unknown>).supportedGains
 							: undefined
 						if (Array.isArray(raw)) {
-							supportedValues = raw.map(Number).filter(Number.isFinite)
+							supportedValues = [...new Set(raw.map(Number).filter(Number.isFinite))].sort((a, b) => a - b)
 						}
 					} catch {
 						// Older camera firmware may not expose this optional endpoint.
 					}
 
-					const nextGain = currentGain + direction
-					if (supportedValues.length > 0 && !supportedValues.includes(nextGain)) {
-						self.log('warn', 'Cannot change gain by exactly 1 dB: ' + nextGain + ' dB is not in the camera's supported gain list.')
-						return
+					let nextGain = currentGain + direction
+					if (supportedValues.length > 0) {
+						const currentIndex = supportedValues.indexOf(currentGain)
+						if (currentIndex >= 0) {
+							const nextIndex = currentIndex + direction
+							if (nextIndex < 0 || nextIndex >= supportedValues.length) return
+							nextGain = supportedValues[nextIndex]
+						} else {
+							const candidates = supportedValues.filter((value) =>
+								direction > 0 ? value > currentGain : value < currentGain,
+							)
+							if (candidates.length === 0) return
+							nextGain = direction > 0 ? candidates[0] : candidates[candidates.length - 1]
+						}
 					}
 
 					await self.client.request('PUT', '/video/gain', { gain: nextGain })
@@ -472,7 +482,6 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 		},
 	}
 }
-
 export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint[]): CompanionActionDefinitions {
 	const definitions: CompanionActionDefinitions = {}
 	for (const endpoint of endpoints) {
