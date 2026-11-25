@@ -448,9 +448,10 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 					let supportedValues: number[] = []
 					try {
 						const supportedResponse = await self.client.request('GET', '/video/supportedGains')
-						const raw = supportedResponse && typeof supportedResponse === 'object'
-							? (supportedResponse as Record<string, unknown>).supportedGains
-							: undefined
+						const raw =
+							supportedResponse && typeof supportedResponse === 'object'
+								? (supportedResponse as Record<string, unknown>).supportedGains
+								: undefined
 						if (Array.isArray(raw)) {
 							supportedValues = [...new Set(raw.map(Number).filter(Number.isFinite))].sort((a, b) => a - b)
 						}
