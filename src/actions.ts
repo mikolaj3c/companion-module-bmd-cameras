@@ -483,7 +483,7 @@ function buildColorGainStepAction(
 
 	return {
 		name: actionLabel,
-		description: `Changes only the ${channelLabel.toLowerCase()} color-correction gain by exactly 1.`,
+		description: `Changes only the ${channelLabel.toLowerCase()} color-correction gain by exactly ${stepLabel}.`,
 		options: [],
 		callback: async (_event: CompanionActionEvent) => {
 			try {
