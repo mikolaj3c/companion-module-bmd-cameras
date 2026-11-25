@@ -93,7 +93,10 @@ function setPropertyValues(
 		values[`${varId}_json`] = toStringValue(rawValue)
 		if (rawValue && typeof rawValue === 'object') {
 			for (const subKey of Object.keys(prop.properties ?? {})) {
-				values[`${varId}_${subKey}`] = toVariableString(`${varId}_${subKey}`, (rawValue as Record<string, unknown>)[subKey])
+				values[`${varId}_${subKey}`] = toVariableString(
+					`${varId}_${subKey}`,
+					(rawValue as Record<string, unknown>)[subKey],
+				)
 			}
 		}
 		// Also expand runtime properties not in schema
