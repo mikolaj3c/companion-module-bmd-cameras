@@ -456,7 +456,10 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 						// Older camera firmware may not expose this optional endpoint.
 					}
 
-					let nextGain = currentGain + direction
+					// Studio Camera 4K Pro gain is adjusted in 2 dB increments (1/3 stop).
+					// Prefer the camera's advertised list; use the documented 2 dB step if unavailable.
+					const fallbackStep = self.productName.toLowerCase().includes('studio camera 4k pro') ? 2 : 1
+					let nextGain = currentGain + direction * fallbackStep
 					if (supportedValues.length > 0) {
 						const currentIndex = supportedValues.indexOf(currentGain)
 						if (currentIndex >= 0) {
