@@ -420,6 +420,139 @@ function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoi
 	}
 }
 
+/**
+ * Increment/decrement camera gain. Studio Camera 4K Pro uses fixed 2 dB steps
+ * across the documented -12 dB to +36 dB range. Other models use the camera's
+ * advertised supported-gain list when available.
+ */
+function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
+	const stepDb = 2
+	const label = direction > 0 ? 'Gain Up (+2 dB)' : 'Gain Down (-2 dB)'
+	return {
+		name: label,
+		description: 'Changes Studio Camera 4K Pro gain by exactly 2 dB, within -12 dB to +36 dB.',
+		options: [],
+		callback: async (_event: CompanionActionEvent) => {
+			try {
+				await withMutex('/video/gain', async () => {
+					const currentResponse = await self.client.request('GET', '/video/gain')
+					if (!currentResponse || typeof currentResponse !== 'object') {
+						throw new Error('Camera did not return the current gain value')
+					}
+
+					const currentGain = Number((currentResponse as Record<string, unknown>).gain)
+					if (!Number.isFinite(currentGain)) {
+						throw new Error('Camera returned an invalid gain value')
+					}
+
+					const nextGain = currentGain + direction * stepDb
+
+					// Studio Camera 4K Pro supports gain from -12 dB through +36 dB
+					// in fixed 2 dB increments. Do not use /video/supportedGains:
+					// some firmware advertises intermediate 1 dB values.
+					if (nextGain < -12 || nextGain > 36) return
+
+					await self.client.request('PUT', '/video/gain', { gain: nextGain })
+					self.store.set('/video/gain', { gain: nextGain }, 'rest')
+					self.log('debug', 'Gain changed from ' + currentGain + ' dB to ' + nextGain + ' dB')
+				})
+			} catch (error) {
+				self.log('error', 'Action ' + label + ' failed: ' + errorMessage(error))
+			}
+		},
+	}
+}
+
+/**
+ * Increment/decrement one RGB color-correction gain channel by exactly 1.
+ * The API leaves omitted channel values unchanged, so only the selected channel
+ * is sent in the PUT request.
+ */
+function buildColorGainStepAction(
+	self: ModuleInstance,
+	channel: 'red' | 'green' | 'blue',
+	direction: 1 | -1,
+): CompanionActionDefinition {
+	const channelLabel = channel.charAt(0).toUpperCase() + channel.slice(1)
+	const step = 0.1
+	const stepLabel = step.toFixed(1)
+	const signedStep = direction > 0 ? `+${stepLabel}` : `-${stepLabel}`
+	const actionLabel =
+		direction > 0 ? `${channelLabel} Gain Up (${signedStep})` : `${channelLabel} Gain Down (${signedStep})`
+	const endpointPath = '/colorCorrection/gain'
+
+	return {
+		name: actionLabel,
+		description: `Changes only the ${channelLabel.toLowerCase()} color-correction gain by exactly ${stepLabel}.`,
+		options: [],
+		callback: async (_event: CompanionActionEvent) => {
+			try {
+				await withMutex(endpointPath, async () => {
+					const currentResponse = await self.client.request('GET', endpointPath)
+					if (!currentResponse || typeof currentResponse !== 'object' || Array.isArray(currentResponse)) {
+						throw new Error('Camera did not return color-correction gain values')
+					}
+
+					const currentValues = currentResponse as Record<string, unknown>
+					const rawCurrentValue = Number(currentValues[channel])
+					if (!Number.isFinite(rawCurrentValue)) {
+						throw new Error(`Camera returned an invalid ${channel} color-correction gain value`)
+					}
+
+					// Camera values can arrive as float32 artifacts (for example 3.299999952316284).
+					// Normalize the current value to one decimal place before applying the step.
+					const currentValue = Number(rawCurrentValue.toFixed(1))
+					// All RGB channels use 0.1 increments.
+					const nextValue = Number((currentValue + direction * step).toFixed(1))
+					await self.client.request('PUT', endpointPath, { [channel]: nextValue })
+					self.store.set(endpointPath, { ...currentValues, [channel]: nextValue }, 'rest')
+					self.log('debug', `${channelLabel} color-correction gain changed from ${currentValue} to ${nextValue}`)
+				})
+			} catch (error) {
+				self.log('error', `Action '${actionLabel}' failed: ${errorMessage(error)}`)
+			}
+		},
+	}
+}
+
+/**
+ * Increment/decrement white balance in 100 K steps.
+ * The camera API exposes the current value at /video/whiteBalance.
+ */
+function buildWhiteBalanceStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
+	const stepKelvin = 100
+	const label = direction > 0 ? 'White Balance Up (+100 K)' : 'White Balance Down (-100 K)'
+	return {
+		name: label,
+		description: 'Changes white balance by exactly 100 K, within 2500 K to 10000 K.',
+		options: [],
+		callback: async (_event: CompanionActionEvent) => {
+			try {
+				await withMutex('/video/whiteBalance', async () => {
+					const currentResponse = await self.client.request('GET', '/video/whiteBalance')
+					if (!currentResponse || typeof currentResponse !== 'object' || Array.isArray(currentResponse)) {
+						throw new Error('Camera did not return the current white balance value')
+					}
+
+					const currentWhiteBalance = Number((currentResponse as Record<string, unknown>).whiteBalance)
+					if (!Number.isFinite(currentWhiteBalance)) {
+						throw new Error('Camera returned an invalid white balance value')
+					}
+
+					const nextWhiteBalance = currentWhiteBalance + direction * stepKelvin
+					if (nextWhiteBalance < 2500 || nextWhiteBalance > 10000) return
+
+					await self.client.request('PUT', '/video/whiteBalance', { whiteBalance: nextWhiteBalance })
+					self.store.set('/video/whiteBalance', { whiteBalance: nextWhiteBalance }, 'rest')
+					self.log('debug', 'White balance changed from ' + currentWhiteBalance + ' K to ' + nextWhiteBalance + ' K')
+				})
+			} catch (error) {
+				self.log('error', 'Action ' + label + ' failed: ' + errorMessage(error))
+			}
+		},
+	}
+}
+
 export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint[]): CompanionActionDefinitions {
 	const definitions: CompanionActionDefinitions = {}
 	for (const endpoint of endpoints) {
@@ -439,6 +572,30 @@ export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint
 		if (hasNestedSchema(requestSchema)) {
 			definitions[`${id}_single`] = buildSingleFieldAction(self, endpoint)
 		}
+	}
+	// Encoder-friendly gain actions, available only when the camera supports GET and PUT on /video/gain.
+	const gainEndpoint = endpoints.find((endpoint) => endpoint.path === '/video/gain' && !endpoint.unsupported)
+	if (gainEndpoint?.methods.includes('GET') && gainEndpoint.methods.includes('PUT')) {
+		definitions['video_gain_up'] = buildGainStepAction(self, 1)
+		definitions['video_gain_down'] = buildGainStepAction(self, -1)
+	}
+	// Encoder-friendly RGB color-correction gain actions. Each action modifies one channel only.
+	const colorGainEndpoint = endpoints.find(
+		(endpoint) => endpoint.path === '/colorCorrection/gain' && !endpoint.unsupported,
+	)
+	if (colorGainEndpoint?.methods.includes('GET') && colorGainEndpoint.methods.includes('PUT')) {
+		for (const channel of ['blue', 'green', 'red'] as const) {
+			definitions[`colorCorrection_gain_${channel}_up`] = buildColorGainStepAction(self, channel, 1)
+			definitions[`colorCorrection_gain_${channel}_down`] = buildColorGainStepAction(self, channel, -1)
+		}
+	}
+	// Encoder-friendly white-balance actions. The variable video_whiteBalance reflects the updated value.
+	const whiteBalanceEndpoint = endpoints.find(
+		(endpoint) => endpoint.path === '/video/whiteBalance' && !endpoint.unsupported,
+	)
+	if (whiteBalanceEndpoint?.methods.includes('GET') && whiteBalanceEndpoint.methods.includes('PUT')) {
+		definitions['video_whiteBalance_up'] = buildWhiteBalanceStepAction(self, 1)
+		definitions['video_whiteBalance_down'] = buildWhiteBalanceStepAction(self, -1)
 	}
 	return definitions
 }

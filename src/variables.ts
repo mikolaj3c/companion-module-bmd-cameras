@@ -38,6 +38,15 @@ function toStringValue(input: unknown): string {
 	}
 }
 
+/** Round the three color-correction gain variables to the precision used by the controls. */
+function toVariableString(varId: string, input: unknown): string {
+	if (/^colorCorrection_gain_(red|green|blue)$/.test(varId) && input !== undefined && input !== null) {
+		const numericValue = Number(input)
+		if (Number.isFinite(numericValue)) return String(Number(numericValue.toFixed(1)))
+	}
+	return toStringValue(input)
+}
+
 function getPathValue(obj: unknown, fieldPath: string): unknown {
 	if (!fieldPath) return obj
 	const parts = fieldPath.split('.').filter((p: string) => p.length > 0)
@@ -84,17 +93,20 @@ function setPropertyValues(
 		values[`${varId}_json`] = toStringValue(rawValue)
 		if (rawValue && typeof rawValue === 'object') {
 			for (const subKey of Object.keys(prop.properties ?? {})) {
-				values[`${varId}_${subKey}`] = toStringValue((rawValue as Record<string, unknown>)[subKey])
+				values[`${varId}_${subKey}`] = toVariableString(
+					`${varId}_${subKey}`,
+					(rawValue as Record<string, unknown>)[subKey],
+				)
 			}
 		}
 		// Also expand runtime properties not in schema
 		if (rawValue && typeof rawValue === 'object' && !prop.properties) {
 			for (const [subKey, subVal] of Object.entries(rawValue as Record<string, unknown>)) {
-				values[`${varId}_${subKey}`] = toStringValue(subVal)
+				values[`${varId}_${subKey}`] = toVariableString(`${varId}_${subKey}`, subVal)
 			}
 		}
 	} else {
-		values[varId] = toStringValue(rawValue)
+		values[varId] = toVariableString(varId, rawValue)
 	}
 }
 
