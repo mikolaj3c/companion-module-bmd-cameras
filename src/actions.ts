@@ -463,6 +463,51 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 	}
 }
 
+
+/**
+ * Increment/decrement one RGB color-correction gain channel by exactly 1.
+ * The API leaves omitted channel values unchanged, so only the selected channel
+ * is sent in the PUT request.
+ */
+function buildColorGainStepAction(
+	self: ModuleInstance,
+	channel: 'red' | 'green' | 'blue',
+	direction: 1 | -1,
+): CompanionActionDefinition {
+	const channelLabel = channel.charAt(0).toUpperCase() + channel.slice(1)
+	const actionLabel = direction > 0 ? `${channelLabel} Gain Up (+1)` : `${channelLabel} Gain Down (-1)`
+	const endpointPath = '/colorCorrection/gain'
+
+	return {
+		name: actionLabel,
+		description: `Changes only the ${channelLabel.toLowerCase()} color-correction gain by exactly 1.`,
+		options: [],
+		callback: async (_event: CompanionActionEvent) => {
+			try {
+				await withMutex(endpointPath, async () => {
+					const currentResponse = await self.client.request('GET', endpointPath)
+					if (!currentResponse || typeof currentResponse !== 'object' || Array.isArray(currentResponse)) {
+						throw new Error('Camera did not return color-correction gain values')
+					}
+
+					const currentValues = currentResponse as Record<string, unknown>
+					const currentValue = Number(currentValues[channel])
+					if (!Number.isFinite(currentValue)) {
+						throw new Error(`Camera returned an invalid ${channel} color-correction gain value`)
+					}
+
+					const nextValue = currentValue + direction
+					await self.client.request('PUT', endpointPath, { [channel]: nextValue })
+					self.store.set(endpointPath, { ...currentValues, [channel]: nextValue }, 'rest')
+					self.log('debug', `${channelLabel} color-correction gain changed from ${currentValue} to ${nextValue}`)
+				})
+			} catch (error) {
+				self.log('error', `Action '${actionLabel}' failed: ${errorMessage(error)}`)
+			}
+		},
+	}
+}
+
 export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint[]): CompanionActionDefinitions {
 	const definitions: CompanionActionDefinitions = {}
 	for (const endpoint of endpoints) {
@@ -488,6 +533,16 @@ export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint
 	if (gainEndpoint?.methods.includes('GET') && gainEndpoint.methods.includes('PUT')) {
 		definitions['video_gain_up'] = buildGainStepAction(self, 1)
 		definitions['video_gain_down'] = buildGainStepAction(self, -1)
+	}
+	// Encoder-friendly RGB color-correction gain actions. Each action modifies one channel only.
+	const colorGainEndpoint = endpoints.find(
+		(endpoint) => endpoint.path === '/colorCorrection/gain' && !endpoint.unsupported,
+	)
+	if (colorGainEndpoint?.methods.includes('GET') && colorGainEndpoint.methods.includes('PUT')) {
+		for (const channel of ['blue', 'green', 'red'] as const) {
+			definitions[`colorCorrection_gain_${channel}_up`] = buildColorGainStepAction(self, channel, 1)
+			definitions[`colorCorrection_gain_${channel}_down`] = buildColorGainStepAction(self, channel, -1)
+		}
 	}
 	return definitions
 }
