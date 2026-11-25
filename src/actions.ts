@@ -463,7 +463,6 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 	}
 }
 
-
 /**
  * Increment/decrement one RGB color-correction gain channel by exactly 1.
  * The API leaves omitted channel values unchanged, so only the selected channel
