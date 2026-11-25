@@ -421,57 +421,58 @@ function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoi
 }
 
 /**
- * Increment/decrement the camera gain by exactly one dB.
- * If the camera advertises supported gain values, the target must be in that list.
- */
+* Increment/decrement the camera gain by exactly one dB.
+* If the camera advertises supported gain values, the target must be in that list.
+*/
 function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
-    const label = direction > 0 ? 'Gain Up (+1 dB)' : 'Gain Down (-1 dB)'
-    return {
-        name: label,
-        description: 'Reads the current camera gain and changes it by exactly 1 dB.',
-        options: [],
-        callback: async (_event: CompanionActionEvent) => {
-            try {
-                await withMutex('/video/gain', async () => {
-                    const currentResponse = await self.client.request('GET', '/video/gain')
-                    if (!currentResponse || typeof currentResponse !== 'object') {
-                        throw new Error('Camera did not return the current gain value')
-                    }
+	const label = direction > 0 ? 'Gain Up (+1 dB)' : 'Gain Down (-1 dB)'
+	return {
+		name: label,
+		description: 'Reads the current camera gain and changes it by exactly 1 dB.',
+		options: [],
+		callback: async (_event: CompanionActionEvent) => {
+			try {
+				await withMutex('/video/gain', async () => {
+					const currentResponse = await self.client.request('GET', '/video/gain')
+					if (!currentResponse || typeof currentResponse !== 'object') {
+						throw new Error('Camera did not return the current gain value')
+					}
 
-                    const currentGain = Number((currentResponse as Record<string, unknown>).gain)
-                    if (!Number.isFinite(currentGain)) {
-                        throw new Error('Camera returned an invalid gain value')
-                    }
+					const currentGain = Number((currentResponse as Record<string, unknown>).gain)
+					if (!Number.isFinite(currentGain)) {
+						throw new Error('Camera returned an invalid gain value')
+					}
 
-                    let supportedValues: number[] = []
-                    try {
-                        const supportedResponse = await self.client.request('GET', '/video/supportedGains')
-                        const raw = supportedResponse && typeof supportedResponse === 'object'
-                            ? (supportedResponse as Record<string, unknown>).supportedGains
-                            : undefined
-                        if (Array.isArray(raw)) {
-                            supportedValues = raw.map(Number).filter(Number.isFinite)
-                        }
-                    } catch {
-                        // Older camera firmware may not expose this optional endpoint.
-                    }
+					let supportedValues: number[] = []
+					try {
+						const supportedResponse = await self.client.request('GET', '/video/supportedGains')
+						const raw = supportedResponse && typeof supportedResponse === 'object'
+							? (supportedResponse as Record<string, unknown>).supportedGains
+							: undefined
+						if (Array.isArray(raw)) {
+							supportedValues = raw.map(Number).filter(Number.isFinite)
+						}
+					} catch {
+						// Older camera firmware may not expose this optional endpoint.
+					}
 
-                    const nextGain = currentGain + direction
-                    if (supportedValues.length > 0 && !supportedValues.includes(nextGain)) {
-                        self.log('warn', 'Cannot change gain by exactly 1 dB: ' + nextGain + ' dB is not in the camera supported gain list.')
-                        return
-                    }
+					const nextGain = currentGain + direction
+					if (supportedValues.length > 0 && !supportedValues.includes(nextGain)) {
+						self.log('warn', 'Cannot change gain by exactly 1 dB: ' + nextGain + ' dB is not in the camera's supported gain list.')
+						return
+					}
 
-                    await self.client.request('PUT', '/video/gain', { gain: nextGain })
-                    self.store.set('/video/gain', { gain: nextGain }, 'rest')
-                    self.log('debug', 'Gain changed from ' + currentGain + ' dB to ' + nextGain + ' dB')
-                })
-            } catch (error) {
-                self.log('error', 'Action ' + label + ' failed: ' + errorMessage(error))
-            }
-        },
-    }
+					await self.client.request('PUT', '/video/gain', { gain: nextGain })
+					self.store.set('/video/gain', { gain: nextGain }, 'rest')
+					self.log('debug', 'Gain changed from ' + currentGain + ' dB to ' + nextGain + ' dB')
+				})
+			} catch (error) {
+				self.log('error', 'Action ' + label + ' failed: ' + errorMessage(error))
+			}
+		},
+	}
 }
+
 export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint[]): CompanionActionDefinitions {
 	const definitions: CompanionActionDefinitions = {}
 	for (const endpoint of endpoints) {
@@ -494,7 +495,7 @@ export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint
 	}
 	// Encoder-friendly gain actions, available only when the camera supports GET and PUT on /video/gain.
 	const gainEndpoint = endpoints.find((endpoint) => endpoint.path === '/video/gain' && !endpoint.unsupported)
-	if (gainEndpoint?.methods.includes('GET') && gainEndpoint.methods.some((method) => method !== 'GET')) {
+	if (gainEndpoint?.methods.includes('GET') && gainEndpoint.methods.includes('PUT')) {
 		definitions['video_gain_up'] = buildGainStepAction(self, 1)
 		definitions['video_gain_down'] = buildGainStepAction(self, -1)
 	}
