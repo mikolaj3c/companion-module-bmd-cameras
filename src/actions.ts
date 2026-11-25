@@ -421,9 +421,9 @@ function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoi
 }
 
 /**
-* Increment/decrement the camera gain by exactly one dB.
-* If the camera advertises supported gain values, the target must be in that list.
-*/
+ * Increment/decrement the camera gain by one step from the camera's supported list.
+ * The step is 1 dB or another increment, depending on the camera model.
+ */
 function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
 	const label = direction > 0 ? 'Gain Up' : 'Gain Down'
 	return {
@@ -482,6 +482,7 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 		},
 	}
 }
+
 export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint[]): CompanionActionDefinitions {
 	const definitions: CompanionActionDefinitions = {}
 	for (const endpoint of endpoints) {
