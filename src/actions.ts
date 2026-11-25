@@ -58,13 +58,13 @@ function findSupportedChoices(
 
 function cleanBooleanDescription(description: string): string {
 	return description
-		.replace(/^When true,\s*/i, '')
-		.replace(/^If true,\s*/i, '')
-		.replace(/^Indicates if\s*/i, '')
-		.replace(/^Indicates whether\s*/i, '')
-		.replace(/^True when\s*/i, '')
-		.replace(/^Enable or disable\s*/i, '')
-		.replace(/^\w/, (c: string) => c.toUpperCase())
+		.replace(/^When true,\\s*/i, '')
+		.replace(/^If true,\\s*/i, '')
+		.replace(/^Indicates if\\s*/i, '')
+		.replace(/^Indicates whether\\s*/i, '')
+		.replace(/^True when\\s*/i, '')
+		.replace(/^Enable or disable\\s*/i, '')
+		.replace(/^\\w/, (c: string) => c.toUpperCase())
 }
 
 function schemaPropertyToField(
@@ -224,7 +224,7 @@ function buildBodyFromOptions(
 }
 
 function endpointToActionId(endpoint: DiscoveredEndpoint): string {
-	return endpoint.path.replace(/^\//, '').replace(/\//g, '_')
+	return endpoint.path.replace(/^\\//, '').replace(/\\//g, '_')
 }
 
 /** Per-path mutex to serialize concurrent partial updates */
@@ -322,99 +322,68 @@ async function readMergeWrite(
 	})
 }
 
-/** Standard full-update action */
-function buildFullAction(
-	self: ModuleInstance,
-	endpoint: DiscoveredEndpoint,
-	allEndpoints: DiscoveredEndpoint[],
-): CompanionActionDefinition {
-	const method = getMutationMethod(endpoint)
-	const requestSchema = endpoint.requestSchemas?.[method]
-	const override = endpointOverrides[endpoint.path]
-	const dynamicChoices = getDynamicChoices(self, requestSchema, endpoint.path, allEndpoints)
-
-	const fields: SomeCompanionActionInputField[] = []
-	fields.push(...buildFieldsFromSchema(requestSchema, override?.propertyOverrides, dynamicChoices))
-
+/**
+ * Increment/decrement the camera's current gain.
+ * Uses the camera's advertised supported values when available, so every encoder
+ * click moves to the next valid hardware value rather than assuming unsupported steps.
+ */
+function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
+	const label = direction > 0 ? 'Gain Up (+1 dB)' : 'Gain Down (-1 dB)'
 	return {
-		name: getMutationName(endpoint, method),
-		description: endpoint.path,
-		options: fields,
-		callback: async (event: CompanionActionEvent) => {
+		name: label,
+		description: 'Reads the current camera gain and moves one supported step.',
+		options: [],
+		callback: async (_event: CompanionActionEvent) => {
 			try {
-				const actionOptions = (event.options ?? {}) as Record<string, unknown>
-				const body = buildBodyFromOptions(requestSchema, actionOptions)
-				if (!body) return
-
-				if (hasNestedSchema(requestSchema)) {
-					await readMergeWrite(self, endpoint, method, body)
-				} else {
-					const result = await self.client.request(method, endpoint.path, body)
-					if (result !== undefined) {
-						self.store.set(endpoint.path, result, 'rest')
+				await withMutex('/video/gain', async () => {
+					const currentResponse = await self.client.request('GET', '/video/gain')
+					if (!currentResponse || typeof currentResponse !== 'object') {
+						throw new Error('Camera did not return the current gain value')
 					}
-				}
+
+					const currentGain = Number((currentResponse as Record<string, unknown>).gain)
+					if (!Number.isFinite(currentGain)) {
+						throw new Error('Camera returned an invalid gain value')
+					}
+
+					let supportedValues: number[] = []
+					try {
+						const supportedResponse = await self.client.request('GET', '/video/supportedGains')
+						const raw = supportedResponse && typeof supportedResponse === 'object'
+							? (supportedResponse as Record<string, unknown>).supportedGains
+							: undefined
+						if (Array.isArray(raw)) {
+							supportedValues = raw.map(Number).filter(Number.isFinite).sort((a, b) => a - b)
+						}
+					} catch {
+						// Some camera models may not expose supportedGains. Fall back to +/- 1 dB.
+					}
+
+					let nextGain: number
+					if (supportedValues.length > 0) {
+						const currentIndex = supportedValues.findIndex((value) => value === currentGain)
+						if (currentIndex >= 0) {
+							const nextIndex = currentIndex + direction
+							if (nextIndex < 0 || nextIndex >= supportedValues.length) return
+							nextGain = supportedValues[nextIndex]
+						} else {
+							const candidates = supportedValues.filter((value) =>
+								direction > 0 ? value > currentGain : value < currentGain,
+							)
+							if (candidates.length === 0) return
+							nextGain = direction > 0 ? candidates[0] : candidates[candidates.length - 1]
+						}
+					} else {
+						nextGain = currentGain + direction
+					}
+
+					const putResult = await self.client.request('PUT', '/video/gain', { gain: nextGain })
+					self.store.set('/video/gain', { gain: nextGain }, 'rest')
+					self.log('debug', `Gain changed from ${currentGain} dB to ${nextGain} dB`)
+					void putResult
+				})
 			} catch (error) {
-				self.log('error', `Action '${endpoint.path}' failed: ${errorMessage(error)}`)
-			}
-		},
-	}
-}
-
-/** Single-field action for nested endpoints: pick one field, set just that value */
-function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoint): CompanionActionDefinition {
-	const method = getMutationMethod(endpoint)
-	const requestSchema = endpoint.requestSchemas?.[method]
-	if (!requestSchema) return { name: getMutationName(endpoint, method), options: [], callback: async () => {} }
-	const leaves = collectSchemaLeaves(requestSchema)
-
-	const fieldChoices = leaves.map((leaf: { fieldId: string; prop: SchemaProperty }) => ({
-		id: leaf.fieldId,
-		label: leaf.prop.description ?? leaf.fieldId,
-	}))
-
-	return {
-		name: `${getMutationName(endpoint, method)} (single field)`,
-		description: `Set one field on ${endpoint.path}`,
-		options: [
-			{
-				id: 'fieldId',
-				type: 'dropdown',
-				label: 'Field',
-				default: fieldChoices[0]?.id ?? '',
-				choices: fieldChoices,
-			},
-			{
-				id: 'value',
-				type: 'textinput',
-				label: 'Value',
-				default: '',
-				useVariables: true,
-			},
-		],
-		callback: async (event: CompanionActionEvent) => {
-			try {
-				const actionOptions = (event.options ?? {}) as Record<string, unknown>
-				const fieldId = typeof actionOptions.fieldId === 'string' ? actionOptions.fieldId : ''
-				const rawValue = actionOptions.value
-				if (!fieldId || rawValue === undefined || rawValue === '') return
-
-				const leaf = leaves.find((l: { fieldId: string; prop: SchemaProperty }) => l.fieldId === fieldId)
-				if (!leaf) return
-
-				let coerced: unknown = rawValue
-				if (leaf.prop.type === 'number' || leaf.prop.type === 'integer') {
-					coerced = Number(rawValue)
-					if (Number.isNaN(coerced as number)) return
-				} else if (leaf.prop.type === 'boolean') {
-					coerced = rawValue === 'true' || rawValue === '1' || rawValue === true
-				}
-
-				const body: Record<string, unknown> = {}
-				setNestedValue(body, fieldId, coerced)
-				await readMergeWrite(self, endpoint, method, body)
-			} catch (error) {
-				self.log('error', `Action '${endpoint.path}' failed: ${errorMessage(error)}`)
+				self.log('error', `Action '${label}' failed: ${errorMessage(error)}`)
 			}
 		},
 	}
@@ -440,5 +409,14 @@ export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint
 			definitions[`${id}_single`] = buildSingleFieldAction(self, endpoint)
 		}
 	}
+
+	// These actions are registered only when the connected camera exposes the gain
+	// read/write endpoint. This keeps them out of the action list for unsupported models.
+	const gainEndpoint = endpoints.find((endpoint) => endpoint.path === '/video/gain' && !endpoint.unsupported)
+	if (gainEndpoint?.methods.includes('GET') && gainEndpoint.methods.some((method) => method !== 'GET')) {
+		definitions['video_gain_up'] = buildGainStepAction(self, 1)
+		definitions['video_gain_down'] = buildGainStepAction(self, -1)
+	}
+
 	return definitions
 }
