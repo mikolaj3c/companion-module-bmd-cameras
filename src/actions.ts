@@ -425,7 +425,9 @@ function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoi
  * The step is 1 dB or another increment, depending on the camera model.
  */
 function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
-	const label = direction > 0 ? 'Gain Up' : 'Gain Down'
+	const isStudioCamera4KPro = self.productName.toLowerCase().includes('studio camera 4k pro')
+	const fallbackStep = isStudioCamera4KPro ? 2 : 1
+	const label = direction > 0 ? `Gain Up (+${fallbackStep} dB)` : `Gain Down (-${fallbackStep} dB)`
 	return {
 		name: label,
 		description: 'Reads current gain and moves to the next or previous value supported by the camera.',
@@ -458,7 +460,6 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 
 					// Studio Camera 4K Pro gain is adjusted in 2 dB increments (1/3 stop).
 					// Prefer the camera's advertised list; use the documented 2 dB step if unavailable.
-					const fallbackStep = self.productName.toLowerCase().includes('studio camera 4k pro') ? 2 : 1
 					let nextGain = currentGain + direction * fallbackStep
 					if (supportedValues.length > 0) {
 						const currentIndex = supportedValues.indexOf(currentGain)
