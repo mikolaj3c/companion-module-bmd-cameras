@@ -426,12 +426,11 @@ function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoi
  * advertised supported-gain list when available.
  */
 function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
-	const isStudioCamera4KPro = self.productName.toLowerCase().includes('studio camera 4k pro')
-	const fallbackStep = isStudioCamera4KPro ? 2 : 1
-	const label = direction > 0 ? `Gain Up (+${fallbackStep} dB)` : `Gain Down (-${fallbackStep} dB)`
+	const stepDb = 2
+	const label = direction > 0 ? 'Gain Up (+2 dB)' : 'Gain Down (-2 dB)'
 	return {
 		name: label,
-		description: 'Reads current gain and moves to the next or previous value supported by the camera.',
+		description: 'Changes Studio Camera 4K Pro gain by exactly 2 dB, within -12 dB to +36 dB.',
 		options: [],
 		callback: async (_event: CompanionActionEvent) => {
 			try {
@@ -446,47 +445,12 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 						throw new Error('Camera returned an invalid gain value')
 					}
 
-					let supportedValues: number[] = []
-					try {
-						const supportedResponse = await self.client.request('GET', '/video/supportedGains')
-						const raw =
-							supportedResponse && typeof supportedResponse === 'object'
-								? (supportedResponse as Record<string, unknown>).supportedGains
-								: undefined
-						if (Array.isArray(raw)) {
-							supportedValues = [...new Set(raw.map(Number).filter(Number.isFinite))].sort((a, b) => a - b)
-						}
-					} catch {
-						// Older camera firmware may not expose this optional endpoint.
-					}
+					const nextGain = currentGain + direction * stepDb
 
-					let nextGain: number
-
-					if (isStudioCamera4KPro) {
-						// Do not use /video/supportedGains for this model: some firmware
-						// advertises intermediate 1 dB values that the camera will not accept.
-						nextGain = currentGain + direction * 2
-
-						// Studio Camera 4K Pro supports -12 dB through +36 dB only.
-						if (nextGain < -12 || nextGain > 36) return
-					} else {
-						// Other models follow their advertised gain list when available.
-						nextGain = currentGain + direction * fallbackStep
-						if (supportedValues.length > 0) {
-							const currentIndex = supportedValues.indexOf(currentGain)
-							if (currentIndex >= 0) {
-								const nextIndex = currentIndex + direction
-								if (nextIndex < 0 || nextIndex >= supportedValues.length) return
-								nextGain = supportedValues[nextIndex]
-							} else {
-								const candidates = supportedValues.filter((value) =>
-									direction > 0 ? value > currentGain : value < currentGain,
-								)
-								if (candidates.length === 0) return
-								nextGain = direction > 0 ? candidates[0] : candidates[candidates.length - 1]
-							}
-						}
-					}
+					// Studio Camera 4K Pro supports gain from -12 dB through +36 dB
+					// in fixed 2 dB increments. Do not use /video/supportedGains:
+					// some firmware advertises intermediate 1 dB values.
+					if (nextGain < -12 || nextGain > 36) return
 
 					await self.client.request('PUT', '/video/gain', { gain: nextGain })
 					self.store.set('/video/gain', { gain: nextGain }, 'rest')
