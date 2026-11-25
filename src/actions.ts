@@ -421,8 +421,9 @@ function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoi
 }
 
 /**
- * Increment/decrement the camera gain by one step from the camera's supported list.
- * The step is 1 dB or another increment, depending on the camera model.
+ * Increment/decrement camera gain. Studio Camera 4K Pro uses fixed 2 dB steps
+ * across the documented -12 dB to +36 dB range. Other models use the camera's
+ * advertised supported-gain list when available.
  */
 function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
 	const isStudioCamera4KPro = self.productName.toLowerCase().includes('studio camera 4k pro')
@@ -459,20 +460,31 @@ function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): Companion
 						// Older camera firmware may not expose this optional endpoint.
 					}
 
-					// Prefer the camera's advertised list. If unavailable, use the model-specific fallback step.
-					let nextGain = currentGain + direction * fallbackStep
-					if (supportedValues.length > 0) {
-						const currentIndex = supportedValues.indexOf(currentGain)
-						if (currentIndex >= 0) {
-							const nextIndex = currentIndex + direction
-							if (nextIndex < 0 || nextIndex >= supportedValues.length) return
-							nextGain = supportedValues[nextIndex]
-						} else {
-							const candidates = supportedValues.filter((value) =>
-								direction > 0 ? value > currentGain : value < currentGain,
-							)
-							if (candidates.length === 0) return
-							nextGain = direction > 0 ? candidates[0] : candidates[candidates.length - 1]
+					let nextGain: number
+
+					if (isStudioCamera4KPro) {
+						// Do not use /video/supportedGains for this model: some firmware
+						// advertises intermediate 1 dB values that the camera will not accept.
+						nextGain = currentGain + direction * 2
+
+						// Studio Camera 4K Pro supports -12 dB through +36 dB only.
+						if (nextGain < -12 || nextGain > 36) return
+					} else {
+						// Other models follow their advertised gain list when available.
+						nextGain = currentGain + direction * fallbackStep
+						if (supportedValues.length > 0) {
+							const currentIndex = supportedValues.indexOf(currentGain)
+							if (currentIndex >= 0) {
+								const nextIndex = currentIndex + direction
+								if (nextIndex < 0 || nextIndex >= supportedValues.length) return
+								nextGain = supportedValues[nextIndex]
+							} else {
+								const candidates = supportedValues.filter((value) =>
+									direction > 0 ? value > currentGain : value < currentGain,
+								)
+								if (candidates.length === 0) return
+								nextGain = direction > 0 ? candidates[0] : candidates[candidates.length - 1]
+							}
 						}
 					}
 
