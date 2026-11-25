@@ -58,13 +58,13 @@ function findSupportedChoices(
 
 function cleanBooleanDescription(description: string): string {
 	return description
-		.replace(/^When true,\\s*/i, '')
-		.replace(/^If true,\\s*/i, '')
-		.replace(/^Indicates if\\s*/i, '')
-		.replace(/^Indicates whether\\s*/i, '')
-		.replace(/^True when\\s*/i, '')
-		.replace(/^Enable or disable\\s*/i, '')
-		.replace(/^\\w/, (c: string) => c.toUpperCase())
+		.replace(/^When true,\s*/i, '')
+		.replace(/^If true,\s*/i, '')
+		.replace(/^Indicates if\s*/i, '')
+		.replace(/^Indicates whether\s*/i, '')
+		.replace(/^True when\s*/i, '')
+		.replace(/^Enable or disable\s*/i, '')
+		.replace(/^\w/, (c: string) => c.toUpperCase())
 }
 
 function schemaPropertyToField(
@@ -224,7 +224,7 @@ function buildBodyFromOptions(
 }
 
 function endpointToActionId(endpoint: DiscoveredEndpoint): string {
-	return endpoint.path.replace(/^\\//, '').replace(/\\//g, '_')
+	return endpoint.path.replace(/^\//, '').replace(/\//g, '_')
 }
 
 /** Per-path mutex to serialize concurrent partial updates */
@@ -322,63 +322,156 @@ async function readMergeWrite(
 	})
 }
 
-/**
- * Increment/decrement the camera's current gain.
- * Uses the camera's advertised supported values when available, so every encoder
- * click moves to the next valid hardware value rather than assuming unsupported steps.
- */
-function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
-	const label = direction > 0 ? 'Gain Up (+1 dB)' : 'Gain Down (-1 dB)'
+/** Standard full-update action */
+function buildFullAction(
+	self: ModuleInstance,
+	endpoint: DiscoveredEndpoint,
+	allEndpoints: DiscoveredEndpoint[],
+): CompanionActionDefinition {
+	const method = getMutationMethod(endpoint)
+	const requestSchema = endpoint.requestSchemas?.[method]
+	const override = endpointOverrides[endpoint.path]
+	const dynamicChoices = getDynamicChoices(self, requestSchema, endpoint.path, allEndpoints)
+
+	const fields: SomeCompanionActionInputField[] = []
+	fields.push(...buildFieldsFromSchema(requestSchema, override?.propertyOverrides, dynamicChoices))
+
 	return {
-		name: label,
-		description: 'Reads current camera gain and changes it by exactly 1 dB when that value is supported.',
-		options: [],
-		callback: async (_event: CompanionActionEvent) => {
+		name: getMutationName(endpoint, method),
+		description: endpoint.path,
+		options: fields,
+		callback: async (event: CompanionActionEvent) => {
 			try {
-				await withMutex('/video/gain', async () => {
-					const currentResponse = await self.client.request('GET', '/video/gain')
-					if (!currentResponse || typeof currentResponse !== 'object') {
-						throw new Error('Camera did not return the current gain value')
-					}
+				const actionOptions = (event.options ?? {}) as Record<string, unknown>
+				const body = buildBodyFromOptions(requestSchema, actionOptions)
+				if (!body) return
 
-					const currentGain = Number((currentResponse as Record<string, unknown>).gain)
-					if (!Number.isFinite(currentGain)) {
-						throw new Error('Camera returned an invalid gain value')
+				if (hasNestedSchema(requestSchema)) {
+					await readMergeWrite(self, endpoint, method, body)
+				} else {
+					const result = await self.client.request(method, endpoint.path, body)
+					if (result !== undefined) {
+						self.store.set(endpoint.path, result, 'rest')
 					}
-
-					let supportedValues: number[] = []
-					try {
-						const supportedResponse = await self.client.request('GET', '/video/supportedGains')
-						const raw = supportedResponse && typeof supportedResponse === 'object'
-							? (supportedResponse as Record<string, unknown>).supportedGains
-							: undefined
-						if (Array.isArray(raw)) {
-							supportedValues = raw.map(Number).filter(Number.isFinite).sort((a, b) => a - b)
-						}
-					} catch {
-						// Some camera models may not expose supportedGains. Fall back to +/- 1 dB.
-					}
-
-					const nextGain = currentGain + direction
-					if (supportedValues.length > 0 && !supportedValues.includes(nextGain)) {
-						self.log(
-							'warn',
-							`Cannot change gain by exactly 1 dB from ${currentGain} dB: ${nextGain} dB is not in the camera's supported gain list.`,
-						)
-						return
-					}
-
-					await self.client.request('PUT', '/video/gain', { gain: nextGain })
-					self.store.set('/video/gain', { gain: nextGain }, 'rest')
-					self.log('debug', `Gain changed from ${currentGain} dB to ${nextGain} dB`)
-				})
+				}
 			} catch (error) {
-				self.log('error', `Action '${label}' failed: ${errorMessage(error)}`)
+				self.log('error', `Action '${endpoint.path}' failed: ${errorMessage(error)}`)
 			}
 		},
 	}
 }
 
+/** Single-field action for nested endpoints: pick one field, set just that value */
+function buildSingleFieldAction(self: ModuleInstance, endpoint: DiscoveredEndpoint): CompanionActionDefinition {
+	const method = getMutationMethod(endpoint)
+	const requestSchema = endpoint.requestSchemas?.[method]
+	if (!requestSchema) return { name: getMutationName(endpoint, method), options: [], callback: async () => {} }
+	const leaves = collectSchemaLeaves(requestSchema)
+
+	const fieldChoices = leaves.map((leaf: { fieldId: string; prop: SchemaProperty }) => ({
+		id: leaf.fieldId,
+		label: leaf.prop.description ?? leaf.fieldId,
+	}))
+
+	return {
+		name: `${getMutationName(endpoint, method)} (single field)`,
+		description: `Set one field on ${endpoint.path}`,
+		options: [
+			{
+				id: 'fieldId',
+				type: 'dropdown',
+				label: 'Field',
+				default: fieldChoices[0]?.id ?? '',
+				choices: fieldChoices,
+			},
+			{
+				id: 'value',
+				type: 'textinput',
+				label: 'Value',
+				default: '',
+				useVariables: true,
+			},
+		],
+		callback: async (event: CompanionActionEvent) => {
+			try {
+				const actionOptions = (event.options ?? {}) as Record<string, unknown>
+				const fieldId = typeof actionOptions.fieldId === 'string' ? actionOptions.fieldId : ''
+				const rawValue = actionOptions.value
+				if (!fieldId || rawValue === undefined || rawValue === '') return
+
+				const leaf = leaves.find((l: { fieldId: string; prop: SchemaProperty }) => l.fieldId === fieldId)
+				if (!leaf) return
+
+				let coerced: unknown = rawValue
+				if (leaf.prop.type === 'number' || leaf.prop.type === 'integer') {
+					coerced = Number(rawValue)
+					if (Number.isNaN(coerced as number)) return
+				} else if (leaf.prop.type === 'boolean') {
+					coerced = rawValue === 'true' || rawValue === '1' || rawValue === true
+				}
+
+				const body: Record<string, unknown> = {}
+				setNestedValue(body, fieldId, coerced)
+				await readMergeWrite(self, endpoint, method, body)
+			} catch (error) {
+				self.log('error', `Action '${endpoint.path}' failed: ${errorMessage(error)}`)
+			}
+		},
+	}
+}
+
+/**
+ * Increment/decrement the camera gain by exactly one dB.
+ * If the camera advertises supported gain values, the target must be in that list.
+ */
+function buildGainStepAction(self: ModuleInstance, direction: 1 | -1): CompanionActionDefinition {
+    const label = direction > 0 ? 'Gain Up (+1 dB)' : 'Gain Down (-1 dB)'
+    return {
+        name: label,
+        description: 'Reads the current camera gain and changes it by exactly 1 dB.',
+        options: [],
+        callback: async (_event: CompanionActionEvent) => {
+            try {
+                await withMutex('/video/gain', async () => {
+                    const currentResponse = await self.client.request('GET', '/video/gain')
+                    if (!currentResponse || typeof currentResponse !== 'object') {
+                        throw new Error('Camera did not return the current gain value')
+                    }
+
+                    const currentGain = Number((currentResponse as Record<string, unknown>).gain)
+                    if (!Number.isFinite(currentGain)) {
+                        throw new Error('Camera returned an invalid gain value')
+                    }
+
+                    let supportedValues: number[] = []
+                    try {
+                        const supportedResponse = await self.client.request('GET', '/video/supportedGains')
+                        const raw = supportedResponse && typeof supportedResponse === 'object'
+                            ? (supportedResponse as Record<string, unknown>).supportedGains
+                            : undefined
+                        if (Array.isArray(raw)) {
+                            supportedValues = raw.map(Number).filter(Number.isFinite)
+                        }
+                    } catch {
+                        // Older camera firmware may not expose this optional endpoint.
+                    }
+
+                    const nextGain = currentGain + direction
+                    if (supportedValues.length > 0 && !supportedValues.includes(nextGain)) {
+                        self.log('warn', 'Cannot change gain by exactly 1 dB: ' + nextGain + ' dB is not in the camera supported gain list.')
+                        return
+                    }
+
+                    await self.client.request('PUT', '/video/gain', { gain: nextGain })
+                    self.store.set('/video/gain', { gain: nextGain }, 'rest')
+                    self.log('debug', 'Gain changed from ' + currentGain + ' dB to ' + nextGain + ' dB')
+                })
+            } catch (error) {
+                self.log('error', 'Action ' + label + ' failed: ' + errorMessage(error))
+            }
+        },
+    }
+}
 export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint[]): CompanionActionDefinitions {
 	const definitions: CompanionActionDefinitions = {}
 	for (const endpoint of endpoints) {
@@ -399,14 +492,11 @@ export function buildActions(self: ModuleInstance, endpoints: DiscoveredEndpoint
 			definitions[`${id}_single`] = buildSingleFieldAction(self, endpoint)
 		}
 	}
-
-	// These actions are registered only when the connected camera exposes the gain
-	// read/write endpoint. This keeps them out of the action list for unsupported models.
+	// Encoder-friendly gain actions, available only when the camera supports GET and PUT on /video/gain.
 	const gainEndpoint = endpoints.find((endpoint) => endpoint.path === '/video/gain' && !endpoint.unsupported)
 	if (gainEndpoint?.methods.includes('GET') && gainEndpoint.methods.some((method) => method !== 'GET')) {
 		definitions['video_gain_up'] = buildGainStepAction(self, 1)
 		definitions['video_gain_down'] = buildGainStepAction(self, -1)
 	}
-
 	return definitions
 }
